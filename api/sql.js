@@ -64,7 +64,12 @@ async function initDb() {
         FOREIGN KEY (Tags_id) REFERENCES Tags(id) ON DELETE CASCADE,
         FOREIGN KEY (Tasks_id) REFERENCES Tasks(id) ON DELETE CASCADE );`);
 
-
+    db.run(`CREATE INDEX IF NOT EXISTS idx_list_board_id ON ListTables (Board_id);`);
+    db.run(`CREATE INDEX IF NOT EXISTS idx_Tasks_List ON Tasks (List_id);`);
+    db.run(`CREATE INDEX IF NOT EXISTS idx_Tags_Tasks_id ON Task_tags (Tasks_id);`);
+    db.run(`CREATE INDEX IF NOT EXISTS idx_Tasks_tag_id ON Task_tags (Tags_id);`);
+    
+    
     saveDb();
     console.log("Table created successfully");
 }
