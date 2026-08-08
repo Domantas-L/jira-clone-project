@@ -23,13 +23,16 @@ app.use(
 
 app.get("/Boards", (req, res) => {
     const db = getDb();
-    const result = db.prepare("SELECT * FROM Boards ORDER BY id ASC");
+    const page = Math.max(1,parseInt(req.query.page, 10)||1);
+    const limit = Math.min(100,parseInt(req.query.limit,10)||20);
+    const offset = (page-1)*limit;
+    const result = db.prepare("SELECT * FROM Boards ORDER BY id ASC LIMIT ? OFFSET ?",[limit,offset]);
     const rows = [];
     while (result.step()) {
         rows.push(result.getAsObject());
     }
     result.free();
-    res.json({ data: rows });
+    res.json({ data: rows,page,limit });
 })
 
 app.delete("/Boards/:id", (req, res) => {
