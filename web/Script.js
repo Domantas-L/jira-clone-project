@@ -4,139 +4,168 @@ const task_form = document.querySelector("#task_form");
 const form_open_btn = document.querySelector("#open-form-btn");
 const form_close_btn = document.querySelector("#Close-form-btn");
 const Add_new_list = document.querySelector("#Board");
-const item_delete_btn=document.querySelector("#Item_delete_btn");
+const item_delete_btn = document.querySelector("#Item_delete_btn");
 const task_counter = document.querySelector("#Task-counter");
+const board_area = document.querySelector("#board_area");
+const save_btn = document.querySelector("#Save_btn");
 const API = "http://localhost:3001";
+
+const urlParams = new URLSearchParams(window.location.search);
+const board_id = urlParams.get("id");
 
 init();
 
 async function init() {
     showLoading();
-    try{
-    const TodayTasks = await LoadTodayList();
-    RenderTodayTask(TodayTasks);}
-    catch (err)
-    {
-        showError("Couldn't load workouts. Is the API running?")
+    try {
+        const Selectedboard = await fetch_board_by_id(board_id);
+        RenderBoard(Selectedboard.lists);
+    }
+    catch (err) {
+        showError("Couldn't board lists Tasks. Is the API running?")
     }
 
 }
+async function createTask(name, start, end, listId) {
+    const res = await fetch(`${API}/Tasks`,
+        {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name, Start: start, End: end, List_id: listId }),
+        });
+    if (!res.ok) throw new Error("Failed to create");
+    return res.json();
+}
 
-async function LoadTodayList() {    
-    const res = await fetch(`${API}/Tasks`);
-    if(!res.ok)
-    {
-        throw new Error("Failed to load");
+async function DeleteTask(id) {
+    const res = await fetch(`${API}/Tasks/${id}`, {
+        method: "DELETE",
+    });
+    if (!res.ok) {
+        throw new Error("Failed to delete task");
+    }
+    return res.json();
+}
+
+let activeListId = null;
+
+board_area.addEventListener("click", async (event) => {
+    const addBtn = event.target.closest(".open-card-form");
+    if (!addBtn) return;
+    activeListId = Number(addBtn.dataset.listId);
+    form_overlay.classList.remove("hidden");
+
+});
+task_form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const name = document.querySelector("#Task_name").value;
+    const Start = document.querySelector("#Task_Start_time").value;
+    const End = document.querySelector("#Task_End_time").value;
+    if (!activeListId) {
+        return;
+    }
+    try {
+        await createTask(name, Start, End, activeListId);
+        await refreshBoard();
+        form_overlay.classList.add("hidden");
+        task_form.reset();
+        activeListId = null;
+    } catch (err) {
+        console.error("Error creating task:", err);
+    }
+});
+
+board_area.addEventListener("click", async (event) => {
+    const deleteBtn = event.target.closest(".delete-btn");
+
+    const id = Number(deleteBtn.dataset.id);
+    try {
+        await DeleteTask(id);
+        await refreshBoard();
+    }
+    catch (err) {
+        console.error("Error deleting task:", err);
+    }
+});
+
+
+
+
+async function fetch_board_by_id(id) {
+    const res = await fetch(`${API}/Boards/${id}`);
+    if (!res.ok) {
+        throw new Error("Can't load the the board");
     }
     const body = await res.json();
     return body.data;
 }
 
-async function createTodayTask(name,start,end) {
-    const res = await fetch(`${API}/Tasks`,
-        {
-            method: "POST",
-            headers:{ "Content-Type": "application/json" },
-            body:  JSON.stringify({ name, Start: start, End: end }),
-        });
-        if(!res.ok) throw new Error ("Failed to create");
-        return res.json();
-}
-
-async function DeleteTodayTask(id) {
-    const res = await fetch(`${API}/Tasks/${id}`,{
-        method:"DELETE",
-    });
-    if (!res.ok) {
-    throw new Error("Failed to delete task");
-  }
-  return res.json();
-}
-
-form_open_btn.addEventListener("click",() =>{
-    form_overlay.classList.remove("hidden");
-});
-
-
-form_close_btn.addEventListener("click",()=>
-{
-    form_overlay.classList.add("hidden");
-    task_form.reset();
-});
-task_form.addEventListener("submit", async (event)=>
-{
-    event.preventDefault();
-
-    const name = document.querySelector("#Task_name").value;
-    const start = document.querySelector("#Task_Start_time").value;
-    const end = document.querySelector("#Task_End_time").value;
-
-  try{
-    await createTodayTask(name,start,end);
-    const tasks = await LoadTodayList();
-    RenderTodayTask(tasks);
-
-    form_overlay.classList("hidden");
-    task_form.reset();
-  }
-  catch (err){
-    console.error("Error creating task:", err);
-  }
-
-});
-
-today_list.addEventListener("click", async(event)=>
-{
-    const deleteBtn = event.target.closest(".delete-btn");
-
-    const id = Number(deleteBtn.dataset.id);
-    try{
-       await DeleteTodayTask(id);
-       const updatedlist = LoadTodayList();
-       await RenderTodayTask(updatedlist);
-    }
-    catch (err)
-    {
-        console.error("Error deleting task:", err);
-    }
-});
-function RenderTodayTask(tasks = []) {
-
-    if(task_counter)
-    {
-        task_counter.textContent = tasks.length;
-    }
-    if (!tasks || tasks.length == 0) {
-        today_list.innerHTML = "<li><p>Nothing was added yet</p></li>";
+function RenderBoard(lists = []) {
+    if (!board_area)
+        return;
+    if (!lists || lists.length === 0) {
+        board_area.innerHTML = "<p>No lists created yet. Click 'Add another list' to start.</p>";
         return;
     }
-    today_list.innerHTML = tasks.map(w =>
-    `<li class="list-item">
-      <label for=" task-check-box">
-            <input type="checkbox" class="List-checkbox" id="Task-${w.id}" ${w.Done ? "checked" : ""}>
-        </label>
-         <div class="List-task-text">
-            <span> ${w.name}</span>
-        </div>
-        <div class="List-task-text">
-            <span> ${w.Start}</span>
-        </div>
-        <div class="List-task-text">
-            <span> ${w.End}</span>
-        </div>
-    <div class="List-btn-display">
-        <button class="List-btn">Update</button>
-        <button type="button" class="List-btn delete-btn" data-id="${w.id}">Delete</button>
-    </div>
-    </li>`
-    ).join("");
-    console.log("This works");
+    board_area.innerHTML = lists.map(list =>
+        `<section class="single-board" data-list-id="${list.id}">
+            <header class="Board-header">
+                <button type="button" class="Board-name-btn">${list.Title}</button>
+                <span class="Task-counter">${list.tasks ? list.tasks.length : 0}</span>
+            </header>
+
+            <article>
+                <article class="top-List-items-display">
+                    <div class="top-list-item">
+                        <div class="List-task-text"><span>Name of project</span></div>
+                        <div class="List-task-text"><span>Start-time</span></div>
+                        <div class="List-task-text"><span>Estimated end time</span></div>
+                        <div class="List-btn-display"></div>
+                    </div>
+                </article>
+
+                <ul class="List-items-display">
+                   ${renderTasks(list.tasks)}
+                </ul>
+            </article>
+
+            <footer class="List-footer">
+                <div>
+                    <button type="button" class="Add-btn open-card-form" data-list-id="${list.id}">+ Add a card</button>
+                </div>
+            </footer>
+        </section>
+    `).join("");
 }
-function showLoading()
-{
-    today_list.innerHTML ="<p class='loading'>Loading Tasks…</p>";
+
+function renderTasks(tasks = []) {
+    if (!tasks || tasks.length === 0) {
+        return `<li class="empty-list">No tasks yet</li>`;
+    }
+
+    return tasks.map(task => `
+        <li class="list-item" data-task-id="${task.id}">
+            <label for="Task-${task.id}">
+                <input type="checkbox" class="List-checkbox" id="Task-${task.id}" ${task.Done ? "checked" : ""}>
+            </label>
+            <div class="List-task-text">
+                <span>${task.name}</span>
+            </div>
+            <div class="List-btn-display">
+                <button type="button" class="List-btn delete-btn" data-id="${task.id}">Delete</button>
+            </div>
+        </li>
+    `).join("");
 }
-function showError(message)
-{
-    today_list.innerHTML =`<p class='error'>${message}}</p>`;
+
+async function refreshBoard() {
+    const board = await fetch_board_by_id(board_id);
+    RenderBoard(board.lists);
+}
+
+function showLoading() {
+    board_area.innerHTML = "<p class='loading'>Loading Tasks…</p>";
+}
+function showError(message) {
+    board_area.innerHTML = `<p class='error'>${message}</p>`;
 }
