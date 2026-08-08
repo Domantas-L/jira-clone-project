@@ -26,7 +26,8 @@ app.get("/Boards", (req, res) => {
     const page = Math.max(1,parseInt(req.query.page, 10)||1);
     const limit = Math.min(100,parseInt(req.query.limit,10)||20);
     const offset = (page-1)*limit;
-    const result = db.prepare("SELECT * FROM Boards ORDER BY id ASC LIMIT ? OFFSET ?",[limit,offset]);
+    const q =(req.query.q ?? "").trim();
+    const result = db.prepare("SELECT * FROM Boards Where Title LIKE '%'||?||'%' ORDER BY id ASC LIMIT ? OFFSET ?",[q,limit,offset]);
     const rows = [];
     while (result.step()) {
         rows.push(result.getAsObject());
