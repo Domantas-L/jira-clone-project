@@ -54,8 +54,12 @@ app.post("/Boards", (req, res) => {
     const result = db.exec("SELECT last_insert_rowid() AS id");
     const newID = result[0].values[0][0];
     const defaultList = ["To Do", "In Progress", "Done"];
+    const createdLists = [];
     for (const listTitle of defaultList) {
         db.run("INSERT INTO ListTables (Title, Board_Id) VALUES (?,?)", [listTitle, newID]);
+        const listResult =db.exec("SELECT last_insert_rowid() AS id");
+        const listId = listResult[0].values[0][0];
+        createdLists.push({ id: listId, Title: listTitle, Board_id: newID });
     }
 
     saveDb();
@@ -63,7 +67,7 @@ app.post("/Boards", (req, res) => {
         data: {
             id: newID,
             Title: Title.trim(),
-            lists: defaultList.map((title) => { title, newID }),
+            lists: createdLists,
         }
     });
 });
@@ -78,6 +82,7 @@ app.get("/Boards/:id", (req, res) => {
             error: { code: "MISSING_ITEM", message: "No object contains this id" }
         });
         result.free();
+        return;
     }
     const board = result.getAsObject();
     result.free();
