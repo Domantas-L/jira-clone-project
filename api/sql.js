@@ -1,12 +1,43 @@
 const initSqlJs = require("sql.js");
 const fs = require("fs");
 const path = require("path");
+import { sqliteTable,integer,text } from "drizzle-orm/sqlite-core";
+import {sql} from "drizzle-orm";
+import { title } from "process";
 
 const dbPath = process.env.DATABASE_URL || "./data/app.db";
 
 let db;
 
-function saveDb() {
+export const Boards = sqliteTable ("Boards",
+    {
+        id: integer("id").primaryKey({autoIncrement:true}),
+        Title: text("Title").notNull(),
+        Created_at: text("created_at").default("CURRENT_TIMESTAMP")
+
+    }
+);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/*function saveDb() {
     const dir = path.dirname(dbPath);
     if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
@@ -78,4 +109,4 @@ function getDb() {
     return db;
 }
 
-module.exports = { initDb, getDb, saveDb };
+module.exports = { initDb, getDb, saveDb };*/
