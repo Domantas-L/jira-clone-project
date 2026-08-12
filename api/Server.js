@@ -1,11 +1,13 @@
+import express from "express";
+import cors from "cors";
+import { database as db } from "./sql.js";
+import * as schema from "./schema.js";
+import { and, desc, eq, like, sql } from "drizzle-orm";
 
-const express = require("express");
-const cors = require("cors");
-require("dotenv").config();
-const { initDb, getDb, createNewTask, saveDb } = require("./sql");
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+const { Boards, ListTables, Tasks, Tags, Task_tags } = schema;
 
 
 app.use(cors());
@@ -21,241 +23,245 @@ app.use(
 );
 ///Board api
 
-app.get("/Boards", (req, res) => {
-    const db = getDb();
-    const page = Math.max(1,parseInt(req.query.page, 10)||1);
-    const limit = Math.min(100,parseInt(req.query.limit,10)||20);
-    const offset = (page-1)*limit;
-    const q =(req.query.q ?? "").trim();
-    const result = db.prepare("SELECT * FROM Boards Where Title LIKE '%'||?||'%' ORDER BY id ASC LIMIT ? OFFSET ?",[q,limit,offset]);
-    const rows = [];
-    while (result.step()) {
-        rows.push(result.getAsObject());
-    }
-    result.free();
-    res.json({ data: rows,page,limit });
-})
+app.get("/Boards", async (req, res) => {
+    try {
 
-app.delete("/Boards/:id", (req, res) => {
-    const db = getDb();
-    const { id } = req.params;
+        const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+        const limit = Math.min(100, parseInt(req.query.limit, 10) || 20);
+        const q = (req.query.q ?? "").trim();
+        const offset = (page - 1) * limit;
 
-    db.run("DELETE FROM Boards WHERE id =?", [id]);
-    saveDb();
-    res.json({ message: `Board ${id} deleted successfully` });
-});
-
-app.post("/Boards", (req, res) => {
-    const { Title } = req.body;
-    if (!Title) {
-        return res.status(400).json({
-            error: { code: "VALIDATION_ERROR", message: "Title required" },
-        })
-    }
-
-    const db = getDb();
-    db.run("INSERT INTO Boards (Title) VALUES (?)", [Title.trim()]);
-    const result = db.exec("SELECT last_insert_rowid() AS id");
-    const newID = result[0].values[0][0];
-    const defaultList = ["To Do", "In Progress", "Done"];
-    const createdLists = [];
-    for (const listTitle of defaultList) {
-        db.run("INSERT INTO ListTables (Title, Board_Id) VALUES (?,?)", [listTitle, newID]);
-        const listResult =db.exec("SELECT last_insert_rowid() AS id");
-        const listId = listResult[0].values[0][0];
-        createdLists.push({ id: listId, Title: listTitle, Board_id: newID });
-    }
-
-    saveDb();
-    res.status(201).json({
-        data: {
-            id: newID,
-            Title: Title.trim(),
-            lists: createdLists,
-        }
-    });
-});
-
-app.get("/Boards/:id", (req, res) => {
-    const db = getDb();
-    const { id } = req.params;
-
-    const result = db.prepare("SELECT * FROM Boards WHERE id =?", [id]);
-    if (!result.step()) {
-        res.status(404).json({
-            error: { code: "MISSING_ITEM", message: "No object contains this id" }
+        const items = await db.select().from(Boards).where(q).orderBy(desc(Boards.Created_at)).limit(limit).offset(offset);
+        const [{ count }] = await db.select({ count: sql`count(*)`.mapWith(Number) }).from(Boards).where(q);
+        res.json({
+            items,
+            page,
+            limit,
+            total: count
         });
-        result.free();
-        return;
     }
-    const board = result.getAsObject();
-    result.free();
-
-    const lists = db.prepare("SELECT * FROM ListTables WHERE Board_id =? ORDER BY id ASC", [id]);
-    const listsarray = [];
-    while (lists.step()) {
-        listsarray.push(lists.getAsObject());
+    catch (error) {
+        return res.status(500).json({ error: "Internal server error" });
     }
-    lists.free()
-    board.lists = listsarray.map((list) => {
-        const tasks = db.prepare("SELECT * FROM Tasks WHERE List_id =? ORDER BY id ASC", [list.id])
-        const tasksarray = [];
-        while (tasks.step()) {
-            const task = tasks.getAsObject();
+});
 
-            const tags = db.prepare("SELECT t.id,t.Tags, t.color FROM Tags t join Task_tags as tt ON t.id = tt.Tags_id WHERE tt.Tasks_id =?",[task.id]);
-            const tagsarray =[];
-            while(tags.step())
-            {
-                tagsarray.push(tags.getAsObject());
+app.post("/Boards", async (req, res) => {
+    try {
+        const { Title } = req.body || [];
+        const [newBoard] = await db.insert(Boards).values({ Title: Title.trim() }).returning();
+        const defaultLists = await db.insert(ListTables).values([
+            { Title: "To Do", Board_id: newBoard.id },
+            { Title: "In Progress", Board_id: newBoard.id },
+            { Title: "Done", Board_id: newBoard.id },
+        ]).returning();
+        res.status(201).json({
+            data: {
+                ...newBoard,
+                lists: defaultLists,
             }
-            tags.free();
-            tasksarray.push({...task,tags:tagsarray});
-        }
-        tasks.free();
-        return { ...list, tasks: tasksarray };
-    })
-    return res.json({ data: board });
-
-});
-
-///List api
-app.post("/Lists", (req, res) => {
-    const { Title, Board_id } = req.body || {};
-    if (!Title) {
-        return res.status(400).json({
-            error: { code: "VALIDATION_ERROR", message: "Title required" },
         });
     }
-    const db = getDb();
-    db.run("INSERT INTO ListTables (Title,Board_id) VALUES (?,?)", [Title, Board_id]);
-    const result = db.exec("SELECT last_insert_rowid() AS id");
-    const newID = result[0].values[0][0];
-    saveDb();
-    res.status(201).json({
-        data:
-        {
-            id: newID,
-            Title: Title,
-            Board_id: Number(Board_id),
-        }
-    });
-});
-
-app.delete("/Lists/:id", (req, res) => {
-    const db = getDb();
-    const { id } = req.params;
-    db.run("DELETE FROM ListTables WHERE id = ?", [id]);
-    saveDb();
-    res.json({ message: `List ${id} deleted successfully` });
+    catch (error) {
+        return res.status(500).json({ error: "Internal server error" });
+    }
 })
 
-///Task api
 
-app.delete("/Tasks/:id", (req, res) => {
-    const { id } = req.params;
-    const db = getDb();
-
-    db.run("DELETE FROM Tasks WHERE id =?", [id]);
-    saveDb();
-
-    res.json({ message: `Task ${id} deleted successfully` });
+app.delete("/Boards/:id", async (req, res) => {
+    try {
+        const { id } = req.params;
+        const [deletedBoard] = await db.delete(Boards).where(eq(Boards.id, Number(id))).returning();
+        return res.status(200).json({
+            message: "Board deleted succsesfully",
+            board: deletedBoard,
+        });
+    }
+    catch (error) {
+        return res.status(500).json({ error: "Internal server error" });
+    }
 });
 
-app.post("/Tasks", (req, res) => {
 
-    const { name, Start, End, List_id } = req.body || {};
-    if (!name || !Start || !End || !List_id) {
-        return res.status(400).json({
-            error: {
-                code: "VALIDATION_ERROR",
-                message: "name, Start, End, and List_id are required"
+app.get("/Boards/:id", async (req, res) => {
+    try {
+        const { id } = req.params;
+        const BoardId = Number(id);
+        const SelectedBoard = await db.query.Boards.findFirst({
+            where: eq(Boards.id, BoardId),
+            with: {
+                ListTables: {
+                    with: {
+                        Tasks: true,
+                    },
+                },
             },
         });
-    }
-
-    const db = getDb();
-    db.run("INSERT INTO Tasks (name,Start,End,List_id,DONE) VALUES (?,?,?,?,0)", [name, Start, End, List_id]);
-
-    const result = db.exec("SELECT last_insert_rowid() AS id");
-    const newID = result[0].values[0][0];
-
-    saveDb();
-    res.status(201).json({
-        data: {
-            id: newID,
-            name,
-            Start,
-            End,
-            DONE: 0,
-            List_id: Number(List_id),
+        if (!SelectedBoard) {
+            return res.status(404).json({
+                error: { code: "MISSING_ITEM", message: "No board found with this id" },
+            });
         }
-    });
-
-});
-app.post("/Tags",(req,res)=>
-{
-    const {Tags,color} = req.body||{};
-    if (!Tags || typeof Tags !== "string" || !Tags.trim()) {
-        return res.status(400).json({
-            error: { code: "VALIDATION_ERROR", message: "Tag name (Tags) is required" }
+        return res.json({
+            SelectedBoard,
         });
     }
-    const db = getDb();
-    const tagColor = color && color.trim() ? color.trim() : '#0079bf';
-    db.run("INSERT INTO Tags (Tags,color) VALUES(?,?)",[Tags,tagColor]);
-    const result = db.exec("SELECT last_insert_rowid() AS id");
-    const newID = result[0].values[0][0];
+    catch (error) {
+        console.error(error);
+        return res.status(500).json({ error: "board server error" });
+    }
+});
 
-    saveDb();
-
-    res.status(201).json({
-        data: {
-            id: newID,
-            Tags: Tags.trim(),
-            color: tagColor
+app.post("/Lists", async (req, res) => {
+    try {
+        const { title, board_id } = req.body || {};
+        if (!title) {
+            return res.status(400).json({
+                error: { code: "VALIDATION_ERROR", message: "Title required" },
+            });
         }
-    });
-});
-
-app.delete("/Tasks/:taskId/tags/:tagId", (req, res) => {
-    const { taskId, tagId } = req.params;
-    const db = getDb();
-
-    db.run("DELETE FROM Task_tags WHERE Tasks_id = ? AND Tags_id = ?", [taskId, tagId]);
-    saveDb();
-
-    res.json({ message: `Tag ${tagId} removed from Task ${taskId}` });
-});
-
-app.delete("/Tags/:id",(req,res)=>
-{
-    const {id} = req.params;
-    const db = getDb();
-    db.run("DELETE FROM Tags WHERE id =?",[id]);
-    saveDb()
-    res.json({ message: `Tag ${id} deleted successfully` });
-});
-
-app.post("/Tasks/:taskId/tags", (req, res) => {
-    const { taskId } = req.params;
-    const { tagId } = req.body || {};
-
-    if (!tagId) {
-        return res.status(400).json({
-            error: { code: "VALIDATION_ERROR", message: "tagId is required" }
+        const [SeletedList] = await db.insert(ListTables).values({ Title: title.trim(), Board_id: Number(board_id), }).returning();
+        res.status(201).json({
+            data: SeletedList,
         });
     }
-    const db = getDb();
-    db.run("INSERT OR IGNORE INTO Task_tags (Tags_id, Tasks_id) VALUES (?, ?)", [tagId, taskId]);
-    saveDb();
-    res.status(201).json({
-        message: `Tag ${tagId} successfully attached to Task ${taskId}`
-    });
+    catch (error) {
+        return res.status(500).json({ error: "Internal server error" });
+    }
 });
 
-initDb().then(() => {
-    app.listen(PORT, () => {
-        console.log(`Server running on http://localhost:${PORT}`);
-    });
+app.delete("/Lists/:id", async (req, res) => {
+    try {
+        const { id } = req.params;
+        const [DeletedList] = await db.delete(ListTables).where(eq(ListTables.id, Number(id))).returning();
+        if (!DeletedList) {
+            return res.status(404).json({
+                error: { code: "MISSING_ITEM", message: "No list found with this id" },
+            });
+        }
+
+        return res.status(200).json({
+            message: "List deleted succsesfully",
+            List: DeletedList,
+        });
+    }
+    catch (error) {
+        return res.status(500).json({ error: "Internal server error" });
+    }
+});
+
+app.delete("/Tasks/:id", async (req, res) => {
+    try {
+        const { id } = req.params;
+        const [DeletedTask] = await db.delete(Tasks).where(eq(Tasks.id, Number(id))).returning();
+        if (!DeletedTask) {
+            return res.status(404).json({
+                error: { code: "MISSING_ITEM", message: "No Task found with this id" },
+            });
+        }
+        return res.status(200).json({
+            message: "Task deleted succsesfully",
+            Task: DeletedTask,
+        });
+    }
+    catch (error) {
+        return res.status(500).json({ error: "Internal server error" });
+    }
+});
+
+app.post("/Tasks", async (req, res) => {
+    try {
+        const { Name, Start, End, List_id } = req.body || {};
+        if (!Name || !Start || !End || !List_id) {
+            return res.status(400).json({
+                error: {
+                    code: "VALIDATION_ERROR",
+                    message: "name, Start, End, and List_id are required"
+                },
+            });
+            const [NewTask] = await db.insert(Tasks).values({ name: Name, Start: Start, End: End, List_id: List_id }).returning();
+            res.status(201).json({
+                data: NewTask,
+            });
+        }
+    }
+    catch (error) {
+        return res.status(500).json({ error: "Internal server error" });
+    }
+});
+
+app.post("/Tags", async (req, res) => {
+    try {
+        const { tags, Colour } = req.body || {};
+        if (!tags || typeof tags !== "string" || !tags.trim()) {
+            return res.status(400).json({
+                error: { code: "VALIDATION_ERROR", message: "Tag name (Tags) is required" }
+            });
+            const [NewTag] = await db.insert(Tags).values({ Tags: tags, color: Colour }).returning();
+            res.status(201).json({
+                data: NewTag,
+            });
+        }
+    }
+    catch (error) {
+        return res.status(500).json({ error: "Internal server error" });
+    }
+});
+
+app.delete("/Tags/:id", async (req, res) => {
+    try {
+        const { id } = req.params;
+        const [DeletedTag] = await db.delete(Tags).where(eq(Tags.id, Number(id))).returning();
+        if (!DeletedTag) {
+            return res.status(404).json({
+                error: { code: "MISSING_ITEM", message: "No Tag found with this id" },
+            });
+        }
+        return res.status(200).json({
+            message: "Tag deleted succsesfully",
+            Tag: DeletedTag,
+        });
+    }
+    catch (error) {
+        return res.status(500).json({ error: "Internal server error" });
+    }
+});
+
+app.delete("/Tasks/:taskId/tags/:tagId", async (req, res) => {
+    try {
+        const { taskId, tagId } = req.params;
+        const [deletedTagTask] = await db.delete(Task_tags).where(and(eq(Task_tags.taskId, Number(taskId)), eq(Task_tags.tagId, Number(tagId)))).returning();
+        if (!deletedTagTask) {
+            return res.status(404).json({
+                error: {
+                    code: "MISSING_ITEM",
+                    message: "No association found between this task and tag",
+                },
+            });
+        }
+        return res.status(200).json({
+            message: "Tag_task deleted succsesfully",
+            Tag_task: deletedTagTask,
+        });
+
+    }
+    catch (error) {
+        return res.status(500).json({ error: "Internal server error" });
+    }
+});
+app.post("/Tasks/:taskId/tags", async (req, res) => {
+    try {
+        const { taskId } = req.params;
+        const { tagId } = req.body || {};
+        const [newTagTask] = await db.insert(Task_tags).values({ Tasks_id: Number(taskId), Tags_id: Number(tagId), }).returning();
+        return res.status(201).json({
+            message: "Tag attached to task successfully",
+            data: newTagTask,
+        });
+    }
+    catch (error) {
+        return res.status(500).json({ error: "Internal server error" });
+    }
+});
+app.listen(PORT, () => {
+    console.log(`Server running on http://localhost:${PORT}`);
 });
