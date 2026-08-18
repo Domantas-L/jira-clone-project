@@ -47,6 +47,15 @@ export const Tags = sqliteTable("Tags",
         Created_at: text("created_at").default(sql`(CURRENT_TIMESTAMP)`)
     }
 );
+export const Users =sqliteTable("Users",
+    {
+        id: integer("id").primaryKey({ autoIncrement: true }),
+        email: text("Email").unique().notNull(),
+        password_hash: text("Password_Hash").notNull(),
+        role: text("Role",{enum: ["admin","user"]}).notNull().default("user"),
+         Created_at: text("created_at").default(sql`(CURRENT_TIMESTAMP)`),
+    }
+)
 
 export const Task_tags = sqliteTable("Task_tags",
     {
