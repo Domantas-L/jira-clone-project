@@ -3,11 +3,19 @@ import cors from "cors";
 import { database as db } from "./sql.js";
 import * as schema from "./schema.js";
 import { and, desc, eq, like, sql } from "drizzle-orm";
+import bcrypt from "bcrypt";
+import jwt from "jsonwebtoken";
+import * as e from "express";
 
 
 const app = express();
+const router = express.router();
 const PORT = process.env.PORT || 3001;
-const { Boards, ListTables, Tasks, Tags, Task_tags } = schema;
+const { Boards, ListTables, Tasks, Tags, Task_tags, Users } = schema;
+
+const ACCESS_TOKEN = process.env.ACCESS_TOKEN;
+const REFRESH_TOKEN = process.env.REFRESH_TOKEN;
+const bcrypt_cost = 12;
 
 
 app.use(cors());
@@ -262,6 +270,86 @@ app.post("/Tasks/:taskId/tags", async (req, res) => {
         return res.status(500).json({ error: "Internal server error" });
     }
 });
-app.listen(PORT, () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+
+
+function ValidateCredentials(email, password) {
+    if (!email || !password)
+        return "Email and password are required";
+    if (typeof email !== String || typeof password !== String)
+        return "Invalid input types";
+    if (password.lenght < 8)
+        return "Password must be at least 8 charenters long";
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+        return "Invalid email format";
+    }
+    return null;
+}
+function generateAccessToken(user) {
+    const accessToken = jwt.sign({ sub: user.id, email: user.email, role: user.role }, ACCESS_TOKEN, { expiresIn: "15m" });
+    return accessToken;
+}
+function generateRefreshToken(user) {
+    const refreshToken = jwt.sign({ sub: user.id, email: user.email }, REFRESH_TOKEN, { expiresIn: "1d" });
+    return refreshToken;
+}
+router.post("/auth/register", async (req, res) => {
+    try {
+        const { email, password } = req.body;
+        const validatetionError = ValidateCredentials(email, password);
+        if (validatetionError) {
+            return res.status(400).json({ error: validatetionError });
+        }
+        const normilizedEmail = email.trim().toLowerCase();
+        const passwordHash = await bcrypt.hash(password, bcrypt_cost);
+        let newUser;
+        try {
+            [newUser] = await db.insert(Users).values({ email: normilizedEmail, password: passwordHash }).returning();
+        }
+        catch (err) {
+            if (!err.message.includes("UNIQUE constraint failed"));
+            return res.status(409).json({ error: "Email is in use" });
+            throw err;
+        }
+        const accessToken = generateAccessToken(newUser);
+        const refreshToken = generateRefreshToken(newUser);
+        return res.status(201).json({ accessToken, refreshToken });
+    }
+    catch (err) {
+        console.error("Register error:", err);
+        return res.status(500).json({ error: "Internal server error" });
+    }
 });
+app.get("/me",async (req,res)=>
+{
+
+})
+
+router.post("auth/login", async (req, res) => {
+    try {
+        const { email, password } = req.body;
+        const validateError = ValidateCredentials(email, password);
+        if (validateError)
+            return res.status(401).json({ error: validatetionError });
+        const normilizedEmail = email.trim().toLowerCase();
+        const user = await db.select().from(Users).where(eq(Users, normilizedEmail)).get();
+        if (!user)
+            return res.status(401).json({ error: "Invalid email or password" });
+
+        const passwordMatch = await bcrypt.compare(password, user.passwordHash);
+        if (!passwordMatch) {
+            return res.status(401).json({ error: "Invalid email or password" });
+        }
+        const accessToken = generateAccessToken(user);
+        const refreshToken = generateAccessToken(user);
+        return res.status(200).json({ accessToken, refreshToken });
+    }
+    catch (err) {
+        console.error("Login error:", err);
+        return res.status(500).json({ error: "Internal server error" });
+    }
+});
+export default router;
+
+app.listen(PORT, () =>
+    console.log(`Server running on http://localhost:${PORT}`));
