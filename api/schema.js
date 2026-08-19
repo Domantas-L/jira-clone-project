@@ -1,7 +1,8 @@
 import { defineConfig } from "drizzle-kit";
 import { sqliteTable, integer, text, primaryKey, index,} from "drizzle-orm/sqlite-core";
 import { relations, sql } from "drizzle-orm";
-import { timestamp } from "drizzle-orm/gel-core";
+import { boolean, timestamp, uuid } from "drizzle-orm/gel-core";
+import { time } from "drizzle-orm/mysql-core";
 
 const dbPath = process.env.DATABASE_URL || "./data/app.db";
 
@@ -55,7 +56,23 @@ export const Users =sqliteTable("Users",
         role: text("Role",{enum: ["admin","user"]}).notNull().default("user"),
          Created_at: text("created_at").default(sql`(CURRENT_TIMESTAMP)`),
     }
-)
+);
+export const refresh_token = sqliteTable("refresh_token",
+    {
+        id :integer("id").primaryKey({autoIncrement:true}),
+        user_id: text("User_id").notNull().references(() => Users.id,{onDelete:"cascade"}),
+        token_hash: text("token_hash").notNull(),
+        expires: text("Token_expires",{mode:timestamp}).notNull(),
+        is_revoked: integer("is_revoked",{mode :boolean}).notNull().default(false),
+         Created_at: text("created_at").default(sql`(CURRENT_TIMESTAMP)`),
+
+    },
+    (table) => [
+        index("refresh_token_user_id").on(table.user_id),
+        index("refresh_token_hash_idx").on(table.token_hash),
+
+    ]
+);
 
 export const Task_tags = sqliteTable("Task_tags",
     {
