@@ -3,11 +3,20 @@ import cors from "cors";
 import { database as db } from "./sql.js";
 import * as schema from "./schema.js";
 import { and, desc, eq, like, sql } from "drizzle-orm";
+import bcrypt from "bcrypt";
+import jwt from "jsonwebtoken";
+import * as e from "express";
 
 
+const crypto = require('crypto');
 const app = express();
+const router = express.router();
 const PORT = process.env.PORT || 3001;
-const { Boards, ListTables, Tasks, Tags, Task_tags } = schema;
+const { Boards, ListTables, Tasks, Tags, Task_tags, Users, refresh_token } = schema;
+
+const ACCESS_TOKEN = process.env.ACCESS_TOKEN;
+const REFRESH_TOKEN = process.env.REFRESH_TOKEN;
+const bcrypt_cost = 12;
 
 
 app.use(cors());
@@ -262,6 +271,6 @@ app.post("/Tasks/:taskId/tags", async (req, res) => {
         return res.status(500).json({ error: "Internal server error" });
     }
 });
-app.listen(PORT, () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-});
+
+app.listen(PORT, () =>
+    console.log(`Server running on http://localhost:${PORT}`));
