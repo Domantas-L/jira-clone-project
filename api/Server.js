@@ -217,7 +217,7 @@ app.post("/Tags", requireAuth,requireRole("admin"), async (req, res) => {
                 error: { code: "VALIDATION_ERROR", message: "Tag name (Tags) is required" }
             });
         }
-        const [NewTag] = await db.insert(Tags).values({ Tags: tags, color: Colour }).where(eq()).returning();
+        const [NewTag] = await db.insert(Tags).values({ Tags: tags, color: Colour }).returning();
         res.status(201).json({
             data: NewTag,
         });
