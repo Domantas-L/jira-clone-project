@@ -1,7 +1,7 @@
-# fitness-tracker
+# Trello clone
 
 A full stack web application to learn the basics of web development.
-This application tries to imitate jira.
+This application tries to imitate Trello
 
 Stack used for this project
 HTML
