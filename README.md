@@ -10,10 +10,6 @@ Drizzle ORM
 Express
 Node.js
 
-Build during Track 1.
-"Update"
+This project for the time being is running locally.
 
-Run locally
-
-that's it
 
