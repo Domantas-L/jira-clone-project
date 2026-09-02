@@ -1,23 +1,15 @@
+import 'dotenv/config';
 import express from "express";
 import cors from "cors";
 import { database as db } from "./sql.js";
 import * as schema from "./schema.js";
 import { and, desc, eq, like, sql } from "drizzle-orm";
-import bcrypt from "bcrypt";
-import jwt from "jsonwebtoken";
-import * as e from "express";
+import authRouter, {requireAuth , requireRole } from "./Auth.js";
 
 
-const crypto = require('crypto');
 const app = express();
-const router = express.router();
 const PORT = process.env.PORT || 3001;
 const { Boards, ListTables, Tasks, Tags, Task_tags, Users, refresh_token } = schema;
-
-const ACCESS_TOKEN = process.env.ACCESS_TOKEN;
-const REFRESH_TOKEN = process.env.REFRESH_TOKEN;
-const bcrypt_cost = 12;
-
 
 app.use(cors());
 app.use(express.json());
@@ -30,18 +22,23 @@ app.use(
         origin: process.env.WEB_ORIGIN ?? "http://127.0.0.1:5500",
     }),
 );
+app.use(authRouter);
 ///Board api
 
-app.get("/Boards", async (req, res) => {
+app.get("/Boards", requireAuth, async (req, res) => {
     try {
 
         const page = Math.max(1, parseInt(req.query.page, 10) || 1);
         const limit = Math.min(100, parseInt(req.query.limit, 10) || 20);
         const q = (req.query.q ?? "").trim();
         const offset = (page - 1) * limit;
+        const userClause = eq(Boards.UserID, req.user.id);
+        const searchClause = q ? like(Boards.Title, `%${q}%`) : undefined;
+        const clause = searchClause ? and(userClause, searchClause) : userClause;
 
-        const items = await db.select().from(Boards).where(q).orderBy(desc(Boards.Created_at)).limit(limit).offset(offset);
-        const [{ count }] = await db.select({ count: sql`count(*)`.mapWith(Number) }).from(Boards).where(q);
+
+        const items = await db.select().from(Boards).where(clause).orderBy(desc(Boards.Created_at)).limit(limit).offset(offset);
+        const [{ count }] = await db.select({ count: sql`count(*)`.mapWith(Number) }).from(Boards).where(clause);
         res.json({
             items,
             page,
@@ -54,10 +51,15 @@ app.get("/Boards", async (req, res) => {
     }
 });
 
-app.post("/Boards", async (req, res) => {
+app.post("/Boards", requireAuth, async (req, res) => {
     try {
-        const { Title } = req.body || [];
-        const [newBoard] = await db.insert(Boards).values({ Title: Title.trim() }).returning();
+        const { Title } = req.body || {};
+        if (!Title || typeof Title !== "string" || !Title.trim()) {
+            return res.status(400).json({
+                error: { code: "VALIDATION_ERROR", message: "Title is required" },
+            });
+        }
+        const [newBoard] = await db.insert(Boards).values({ Title: Title.trim(), UserID: req.user.id }).returning();
         const defaultLists = await db.insert(ListTables).values([
             { Title: "To Do", Board_id: newBoard.id },
             { Title: "In Progress", Board_id: newBoard.id },
@@ -76,10 +78,13 @@ app.post("/Boards", async (req, res) => {
 })
 
 
-app.delete("/Boards/:id", async (req, res) => {
+app.delete("/Boards/:id", requireAuth, async (req, res) => {
     try {
-        const { id } = req.params;
-        const [deletedBoard] = await db.delete(Boards).where(eq(Boards.id, Number(id))).returning();
+        const { id } = req.params.id;
+        const [deletedBoard] = await db.delete(Boards).where(and(eq(Boards.id, Number(id)),eq(Boards.UserID,req.user.id))).returning();
+        if (!deletedBoard) {
+            return res.status(404).json({ error: "No board found with this id" });
+        }
         return res.status(200).json({
             message: "Board deleted succsesfully",
             board: deletedBoard,
@@ -91,12 +96,11 @@ app.delete("/Boards/:id", async (req, res) => {
 });
 
 
-app.get("/Boards/:id", async (req, res) => {
+app.get("/Boards/:id", requireAuth, async (req, res) => {
     try {
         const { id } = req.params;
-        const BoardId = Number(id);
         const SelectedBoard = await db.query.Boards.findFirst({
-            where: eq(Boards.id, BoardId),
+            where: and( eq(Boards.id, Number(id)),eq(Boards.UserID,req.user.id)),
             with: {
                 ListTables: {
                     with: {
@@ -120,7 +124,7 @@ app.get("/Boards/:id", async (req, res) => {
     }
 });
 
-app.post("/Lists", async (req, res) => {
+app.post("/Lists", requireAuth, async (req, res) => {
     try {
         const { title, board_id } = req.body || {};
         if (!title) {
@@ -138,7 +142,7 @@ app.post("/Lists", async (req, res) => {
     }
 });
 
-app.delete("/Lists/:id", async (req, res) => {
+app.delete("/Lists/:id", requireAuth, async (req, res) => {
     try {
         const { id } = req.params;
         const [DeletedList] = await db.delete(ListTables).where(eq(ListTables.id, Number(id))).returning();
@@ -158,7 +162,7 @@ app.delete("/Lists/:id", async (req, res) => {
     }
 });
 
-app.delete("/Tasks/:id", async (req, res) => {
+app.delete("/Tasks/:id", requireAuth, async (req, res) => {
     try {
         const { id } = req.params;
         const [DeletedTask] = await db.delete(Tasks).where(eq(Tasks.id, Number(id))).returning();
@@ -177,7 +181,7 @@ app.delete("/Tasks/:id", async (req, res) => {
     }
 });
 
-app.post("/Tasks", async (req, res) => {
+app.post("/Tasks", requireAuth, async (req, res) => {
     try {
         const { Name, Start, End, List_id } = req.body || {};
         if (!Name || !Start || !End || !List_id) {
@@ -187,36 +191,43 @@ app.post("/Tasks", async (req, res) => {
                     message: "name, Start, End, and List_id are required"
                 },
             });
-            const [NewTask] = await db.insert(Tasks).values({ name: Name, Start: Start, End: End, List_id: List_id }).returning();
-            res.status(201).json({
-                data: NewTask,
-            });
         }
+        const [NewTask] = await db.insert(Tasks).values({ name: Name, Start: Start, End: End, List_id: List_id }).returning();
+        res.status(201).json({
+            data: NewTask,
+        });
     }
     catch (error) {
         return res.status(500).json({ error: "Internal server error" });
     }
 });
-
-app.post("/Tags", async (req, res) => {
+app.get("/Tags", requireAuth, async (req, res) => {
+    try {
+        const allTags = await db.select().from(Tags);
+        res.json({ data: allTags });
+    } catch (error) {
+        return res.status(500).json({ error: "Internal server error" });
+    }
+});
+app.post("/Tags", requireAuth,requireRole("admin"), async (req, res) => {
     try {
         const { tags, Colour } = req.body || {};
         if (!tags || typeof tags !== "string" || !tags.trim()) {
             return res.status(400).json({
                 error: { code: "VALIDATION_ERROR", message: "Tag name (Tags) is required" }
             });
-            const [NewTag] = await db.insert(Tags).values({ Tags: tags, color: Colour }).returning();
-            res.status(201).json({
-                data: NewTag,
-            });
         }
+        const [NewTag] = await db.insert(Tags).values({ Tags: tags, color: Colour }).where(eq()).returning();
+        res.status(201).json({
+            data: NewTag,
+        });
     }
     catch (error) {
         return res.status(500).json({ error: "Internal server error" });
     }
 });
 
-app.delete("/Tags/:id", async (req, res) => {
+app.delete("/Tags/:id", requireAuth,requireRole("admin"), async (req, res) => {
     try {
         const { id } = req.params;
         const [DeletedTag] = await db.delete(Tags).where(eq(Tags.id, Number(id))).returning();
@@ -235,7 +246,7 @@ app.delete("/Tags/:id", async (req, res) => {
     }
 });
 
-app.delete("/Tasks/:taskId/tags/:tagId", async (req, res) => {
+app.delete("/Tasks/:taskId/tags/:tagId", requireAuth, async (req, res) => {
     try {
         const { taskId, tagId } = req.params;
         const [deletedTagTask] = await db.delete(Task_tags).where(and(eq(Task_tags.taskId, Number(taskId)), eq(Task_tags.tagId, Number(tagId)))).returning();
@@ -257,11 +268,11 @@ app.delete("/Tasks/:taskId/tags/:tagId", async (req, res) => {
         return res.status(500).json({ error: "Internal server error" });
     }
 });
-app.post("/Tasks/:taskId/tags", async (req, res) => {
+app.post("/Tasks/:taskId/tags", requireAuth, async (req, res) => {
     try {
         const { taskId } = req.params;
         const { tagId } = req.body || {};
-        const [newTagTask] = await db.insert(Task_tags).values({ Tasks_id: Number(taskId), Tags_id: Number(tagId), }).returning();
+        const [newTagTask] = await db.insert(Task_tags).values({ Tasks_id: Number(taskId), Tags_id: Number(tagId) }).returning();
         return res.status(201).json({
             message: "Tag attached to task successfully",
             data: newTagTask,
