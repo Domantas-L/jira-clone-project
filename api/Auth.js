@@ -1,26 +1,24 @@
-const jwt = require('jsonwebtoken');
-const bcrypt = require('bcrypt');
-const crypto = require('crypto');
-const { eq } = require('drizzle-orm');
-const express = require('express');
+import jwt from 'jsonwebtoken';
+import bcrypt from 'bcrypt';
+import crypto from 'crypto';
+import { eq } from 'drizzle-orm';
+import express from "express";
+import { database as db } from "./sql.js";
+import * as schema from "./schema.js";
+
 const router = express.Router();
-const db = require('../db');
-const { Users, refresh_token } = require('../schema');
+const { Users, refresh_token } = schema;
 
 const ACCESS_TOKEN_SECRET = process.env.ACCESS_TOKEN_SECRET;
 const REFRESH_TOKEN_SECRET = process.env.REFRESH_TOKEN_SECRET;
 const bcrypt_cost = 12;
 
 function validateCredentials(email, password) {
-    if (!email || !password)
-        return "Email and password are required";
-    if (typeof email !== "string" || typeof password !== "string")
-        return "Invalid input types";
-    if (password.length < 8)
-        return "Password must be at least 8 characters long";
+    if (!email || !password) return "Email and password are required";
+    if (typeof email !== "string" || typeof password !== "string") return "Invalid input types";
+    if (password.length < 8) return "Password must be at least 8 characters long";
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email))
-        return "Invalid email format";
+    if (!emailRegex.test(email)) return "Invalid email format";
     return null;
 }
 
@@ -48,7 +46,7 @@ router.post("/auth/register", async (req, res) => {
         let newUser;
         try {
             [newUser] = await db.insert(Users)
-                .values({ email: normalizedEmail, passwordHash })
+                .values({ email: normalizedEmail, password_hash: passwordHash })
                 .returning();
         } catch (err) {
             if (err.message.includes("UNIQUE constraint failed")) {
@@ -63,7 +61,7 @@ router.post("/auth/register", async (req, res) => {
         await db.insert(refresh_token).values({
             user_id: newUser.id,
             token_hash: hashToken(refreshToken),
-            expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000),
+            expires: Math.floor((Date.now() + 24 * 60 * 60 * 1000) / 1000),
             is_revoked: false,
         });
 
@@ -84,7 +82,7 @@ router.post("/auth/login", async (req, res) => {
         const user = await db.query.Users.findFirst({ where: eq(Users.email, normalizedEmail) });
         if (!user) return res.status(401).json({ error: "Invalid email or password" });
 
-        const passwordMatch = await bcrypt.compare(password, user.passwordHash);
+        const passwordMatch = await bcrypt.compare(password, user.password_hash);
         if (!passwordMatch) return res.status(401).json({ error: "Invalid email or password" });
 
         const accessToken = generateAccessToken(user);
@@ -93,7 +91,7 @@ router.post("/auth/login", async (req, res) => {
         await db.insert(refresh_token).values({
             user_id: user.id,
             token_hash: hashToken(refreshToken),
-            expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000),
+            expires: Math.floor((Date.now() + 24 * 60 * 60 * 1000) / 1000),
             is_revoked: false,
         });
 
@@ -121,7 +119,8 @@ router.post("/auth/refresh", async (req, res, next) => {
             where: eq(refresh_token.token_hash, tokenHash)
         });
 
-        if (!storedToken || storedToken.is_revoked || storedToken.expires_at < new Date()) {
+        const nowSeconds = Math.floor(Date.now() / 1000);
+        if (!storedToken || storedToken.is_revoked || storedToken.expires < nowSeconds) {
             return res.status(401).json({ error: "refresh token revoked or expired" });
         }
 
@@ -129,7 +128,7 @@ router.post("/auth/refresh", async (req, res, next) => {
         if (!user) return res.status(401).json({ error: "User not found" });
 
         await db.update(refresh_token)
-            .set({ is_revoked: true, revoked_at: new Date() })
+            .set({ is_revoked: true, revoked_at: nowSeconds })
             .where(eq(refresh_token.id, storedToken.id));
 
         const newAccessToken = generateAccessToken(user);
@@ -138,7 +137,7 @@ router.post("/auth/refresh", async (req, res, next) => {
         await db.insert(refresh_token).values({
             user_id: user.id,
             token_hash: hashToken(newRefreshToken),
-            expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000),
+            expires: Math.floor((Date.now() + 24 * 60 * 60 * 1000) / 1000),
             is_revoked: false,
         });
 
@@ -148,21 +147,30 @@ router.post("/auth/refresh", async (req, res, next) => {
     }
 });
 
-function requireAuth(req, res, next) {
+export function requireAuth(req, res, next) {
     const authHeader = req.headers.authorization;
     const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
 
     if (!token) return res.status(401).json({ error: "No token provided" });
     try {
-        req.auth = jwt.verify(token, ACCESS_TOKEN_SECRET);
+        const payload = jwt.verify(token, ACCESS_TOKEN_SECRET);
+        req.user = { id: payload.sub, role: payload.role };
         next();
     } catch {
         return res.status(401).json({ error: "Invalid or expired access token" });
     }
 }
 
+export function requireRole(role) {
+    return (req, res, next) => {
+        if (!req.user) return res.status(401).json({ error: "Not authenticated" });
+        if (req.user.role !== role) return res.status(403).json({ error: "Forbidden" });
+        next();
+    };
+}
+
 router.get("/me", requireAuth, async (req, res) => {
-    const user = await db.query.Users.findFirst({ where: eq(Users.id, req.auth.sub) });
+    const user = await db.query.Users.findFirst({ where: eq(Users.id, req.user.id) });
     if (!user) return res.status(404).json({ error: "User not found" });
     res.json({ id: user.id, email: user.email, role: user.role });
 });
